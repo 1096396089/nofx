@@ -28,8 +28,8 @@ RUN npm ci --prefer-offline --no-audit --progress=false
 COPY web/ ./
 
 # ✅ 限制 Node 内存，防止构建时 OOM（Vite/React/Next 均有效）
-ENV NODE_OPTIONS="--max-old-space-size=512"
-RUN npm run build
+ENV NODE_OPTIONS="--max-old-space-size=384"
+RUN npm run build --no-sourcemap
 
 # ✅ 清理缓存减少镜像体积
 RUN npm cache clean --force && rm -rf /root/.npm /tmp/*
