@@ -1,25 +1,24 @@
 # docker/backend/Dockerfile
+
 # ═══════════════════════════════════════════════════════════════
 # NOFX Backend Dockerfile (Go + TA-Lib)
-# Optimized for low-memory servers (1G RAM safe build)
-# Includes: Aliyun mirror, single-threaded build, lightweight deps
+# Multi-stage build with shared TA-Lib compilation stage
+# Versions extracted as ARGs for maintainability
 # ═══════════════════════════════════════════════════════════════
 
 ARG GO_VERSION=1.25-alpine
-ARG ALPINE_VERSION=3.20    # 固定版本以避免 latest 不兼容
+ARG ALPINE_VERSION=latest
 ARG TA_LIB_VERSION=0.4.0
 
 # ──────────────────────────────────────────────────────────────
-# TA-Lib Build Stage (low-memory optimized)
+# TA-Lib Build Stage (shared across builds)
 # ──────────────────────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION} AS ta-lib-builder
 ARG TA_LIB_VERSION
 
-# ✅ 换用国内源，加速 apk
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk update && apk add --no-cache wget tar make gcc g++ musl-dev autoconf automake
+RUN apk update && apk add --no-cache \
+    wget tar make gcc g++ musl-dev autoconf automake
 
-# ✅ 单线程编译（避免 OOM）
 RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-${TA_LIB_VERSION}-src.tar.gz && \
     tar -xzf ta-lib-${TA_LIB_VERSION}-src.tar.gz && \
     cd ta-lib && \
@@ -31,7 +30,7 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-${TA_LIB_VERSION}-src.
         chmod +x config.guess config.sub; \
     fi && \
     ./configure --prefix=/usr/local && \
-    make -j1 && make install && \
+    make && make install && \
     cd .. && rm -rf ta-lib ta-lib-${TA_LIB_VERSION}-src.tar.gz
 
 # ──────────────────────────────────────────────────────────────
@@ -39,9 +38,7 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-${TA_LIB_VERSION}-src.
 # ──────────────────────────────────────────────────────────────
 FROM golang:${GO_VERSION} AS backend-builder
 
-# ✅ 同样换源 + 精简依赖
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk update && apk add --no-cache git make gcc g++ musl-dev
+RUN apk update && apk add --no-cache git make gcc g++ musl-dev
 
 COPY --from=ta-lib-builder /usr/local /usr/local
 
@@ -50,18 +47,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-
-# ✅ 限制并发 + 优化构建参数
-RUN GOMAXPROCS=1 CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w" -o nofx .
+RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w" -o nofx .
 
 # ──────────────────────────────────────────────────────────────
 # Runtime Stage (Minimal Executable Environment)
 # ──────────────────────────────────────────────────────────────
 FROM alpine:${ALPINE_VERSION}
 
-# ✅ 使用镜像源 + 仅保留运行必需包
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk update && apk add --no-cache ca-certificates tzdata curl wget
+RUN apk update && apk add --no-cache ca-certificates tzdata
 
 COPY --from=ta-lib-builder /usr/local /usr/local
 WORKDIR /app

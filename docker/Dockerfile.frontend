@@ -1,8 +1,8 @@
 # docker/frontend/Dockerfile
+
 # ═══════════════════════════════════════════════════════════════
 # NOFX Frontend Dockerfile (Node Build → Nginx Runtime)
-# Optimized for low-memory servers & fast builds
-# Compatible with Node 20 / npm v10
+# Versions extracted as ARGs for consistency
 # ═══════════════════════════════════════════════════════════════
 
 ARG NODE_VERSION=20-alpine
@@ -14,42 +14,22 @@ ARG NGINX_VERSION=alpine
 FROM node:${NODE_VERSION} AS builder
 WORKDIR /build
 
-# ✅ 使用国内 npm 镜像 + 限制并发连接（npm v10 兼容写法）
-RUN npm config set registry https://registry.npmmirror.com && \
-    npm config set maxsockets 1
-
-# ✅ 复制依赖文件
 COPY web/package*.json ./
+RUN npm ci
 
-# ✅ 安装依赖（使用 npm ci 确保一致性并减少网络请求）
-RUN npm ci --prefer-offline --no-audit --progress=false
-
-# ✅ 复制源码并构建
 COPY web/ ./
-
-# ✅ 限制 Node 内存，防止构建时 OOM（Vite/React/Next 均有效）
-ENV NODE_OPTIONS="--max-old-space-size=384"
-RUN npm run build --no-sourcemap
-
-# ✅ 清理缓存减少镜像体积
-RUN npm cache clean --force && rm -rf /root/.npm /tmp/*
+RUN npm run build
 
 # ──────────────────────────────────────────────────────────────
 # Runtime Stage (Nginx)
 # ──────────────────────────────────────────────────────────────
 FROM nginx:${NGINX_VERSION}
 
-# ✅ 使用国内源（防止 apk 卡死，虽然这里一般不需要安装包）
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories && \
-    apk update && apk add --no-cache curl wget
-
-# ✅ 拷贝配置与前端构建产物
 COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /build/dist /usr/share/nginx/html
 
 EXPOSE 80
 
-# ✅ 健康检查（确保容器自愈）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost/health || exit 1
 
